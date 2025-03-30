@@ -34,8 +34,8 @@ app = Flask(__name__)
 # https://developers.line.biz/en/
 
 # TODO: 填入你的 CHANNEL_SECRET 與 CHANNEL_ACCESS_TOKEN
-CHANNEL_SECRET = os.getennv("CANNEL_SECRET")
-CHANNEL_ACCESS_TOKEN = os.getennv("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.getenv("CHANNEL_SECRET")
+CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN")
 
 handler = WebhookHandler(CHANNEL_SECRET)
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)

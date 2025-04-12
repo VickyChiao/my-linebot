@@ -22,11 +22,29 @@ from linebot.v3.webhooks import (
     StickerMessageContent,
     LocationMessageContent,
     ImageMessageContent,
+    VideoMessageContent,
 )
 
 from modules.reply import faq, menu 
 
 import os
+import requests
+
+from dotenv import load_dotenv
+#從openai模組引入OpenAI模組類別
+from openai import OpenAI
+
+load_dotenv()
+#是否在rennder.com運行
+running_on_render= os.getenv("RENDER")
+print("現在是在render上運行嗎?",running_on_render)
+
+if not running_on_render:
+      load_dotenv()
+
+client = OpenAI(
+    api_key=os.getenv("OPENAI_KEY")
+)
 
 app = Flask(__name__)
 
@@ -64,30 +82,37 @@ def handle_message(event):
         # 當使用者傳入文字訊息時
         print("#" * 30)
         line_bot_api = MessagingApi(api_client)
-        # event 為 Line Server 傳來的事件物件所有關於一筆訊息的資料皆可從中取得
-        # print("event 一個Line文件訊息的事件物件:", event)
-        # 在此的 evnet.message.text 即是 Line Server 取得的使用者文字訊息
         user_msg = event.message.text
         print("使用者傳入的文字訊息是:", user_msg)
-        # 使用TextMessage產生一段用於回應使用者的Line文字訊息
-        bot_msg = TextMessage(text=f"你剛才說的是: {user_msg}")
-
+        
         if user_msg in faq:
-            bot_msg= faq[user_msg]
+            bot_msg = faq[user_msg]
         elif user_msg.lower() in ["menu","選單","主選單"]:
             bot_msg = menu
+        else:
+            #如果不在上述考慮過的回應,就使用openai回答
+            completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role":"system",
+                    "content":"""
+你是一個講話幽默風趣的AI
+回應時,使用繁體中文
+使用純文字而不是Markdown格式
+"""
+                }
+            ]
+                
+           
+            )
+            print(completion.choices[0].message.content)
+            bot_msg = TextMessage(text=completion.choices[0].message.content)
 
         line_bot_api.reply_message_with_http_info(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                # 放置於 ReplyMessageRequest 的 messages 裡的物件即是要回傳給使用者的訊息
-                # 必須注意由於 Line 有其使用的內部格式
-                # 因此要回覆的訊息務必使用 Line 官方提供的類別來產生回應物件
-                messages=[
-                    # 要回應的內容放在這個串列中
-                    bot_msg,
-                    TextMessage(text="HI"),
-                ]
+                messages=[bot_msg]
             )
         )
 
@@ -138,6 +163,120 @@ def handle_location_message(event):
                 ]
             )
         )
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image_message(event):
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        message_id = event.message.id
+        
+        # Get image content from LINE Messaging API
+        headers = {
+            'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'
+        }
+        url = f'https://api-data.line.me/v2/bot/message/{message_id}/content'
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            # Convert image content to base64
+            import base64
+            image_base64 = base64.b64encode(response.content).decode('utf-8')
+            
+            # Send to OpenAI Vision API
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "請用繁體中文描述這張圖片中的內容，描述要簡潔但具體。"
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{image_base64}"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens=300
+                )
+                
+                # Get the AI's description
+                description = response.choices[0].message.content
+                
+                # Reply to user with the description
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[
+                            TextMessage(text=f"我看到的是：\n{description}")
+                        ]
+                    )
+                )
+            except Exception as e:
+                print(f"Error with OpenAI Vision API: {str(e)}")
+                line_bot_api.reply_message_with_http_info(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[
+                            TextMessage(text="抱歉，我無法分析這張圖片")
+                        ]
+                    )
+                )
+        else:
+            print(f"Error getting image content: {response.status_code}")
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[
+                        TextMessage(text="抱歉，無法處理圖片內容")
+                    ]
+                )
+            )
+
+# 此處理器負責處理接收到Line Server傳來的影片訊息時的流程
+@handler.add(MessageEvent, message=VideoMessageContent)
+def handle_video_message(event):
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        message_id = event.message.id
+        
+        # Get video content from LINE Messaging API
+        headers = {
+            'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'
+        }
+        url = f'https://api-data.line.me/v2/bot/message/{message_id}/content'
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            # Convert video content to base64
+            import base64
+            video_base64 = base64.b64encode(response.content).decode('utf-8')
+            print(f"Video base64: {video_base64[:100]}...")  # Print first 100 chars of base64
+            
+            # Reply to user
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[
+                        TextMessage(text=f"收到影片了，影片ID: {message_id}")
+                    ]
+                )
+            )
+        else:
+            print(f"Error getting video content: {response.status_code}")
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[
+                        TextMessage(text="抱歉，無法處理影片內容")
+                    ]
+                )
+            )
 
 # 如果應用程式被執行執行
 if __name__ == "__main__":
